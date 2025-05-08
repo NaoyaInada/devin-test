@@ -1,35 +1,51 @@
 import os
+import requests
 from flask import Flask, request, jsonify
 from slack_sdk import WebClient
 
 app = Flask(__name__)
 
-# 環境変数からトークンを読み込み
-slack_token = os.environ.get("SLACK_BOT_TOKEN")
+slack_token = os.environ["SLACK_BOT_TOKEN"]
 client = WebClient(token=slack_token)
 
-@app.route('/slack-events', methods=['POST'])
-def slack_events():
+# 既存の /slack-events は省略…
+
+@app.route('/company-info', methods=['POST'])
+def company_info():
     data = request.get_json()
+    name = data.get("name")
+    if not name:
+        return jsonify({"error": "name field is required"}), 400
 
-    # URL検証用のchallenge応答
-    if data.get('challenge'):
-        return jsonify({'challenge': data['challenge']})
+    # OpenCorporates API を叩く
+    url = f"https://api.opencorporates.com/v0.4/companies/search"
+    params = {"q": name}
+    resp = requests.get(url, params=params)
+    js = resp.json()
 
-    # イベント情報を取り出し
-    event = data.get('event', {})
-    channel_id = event.get('channel')
-    user = event.get('user')
-    text = event.get('text')
+    # 結果を抽出
+    companies = js.get("results", {}).get("companies", [])
+    if not companies:
+        return jsonify({"error": "no company found"}), 200
 
-    # Bot 自身のメッセージには反応しない
-    if user and not event.get('bot_id'):
-        # 例: "Hello" と来たら "Hello, @ユーザーさん!" と返す
-        reply = f"Received your message: \"{text}\""
-        client.chat_postMessage(channel=channel_id, text=reply)
+    top = companies[0]["company"]
+    result = {
+        "company_name": top.get("name"),
+        "jurisdiction_code": top.get("jurisdiction_code"),
+        "incorporation_date": top.get("incorporation_date"),
+        "current_status": top.get("current_status")
+    }
 
-    # 常に 200 OK を返して ACK
-    return '', 200
+    # Slack にも投稿したい場合（オプション）
+    channel = data.get("channel_id")
+    if channel:
+        text = (
+            f"*{result['company_name']}* の情報:\n"
+            f"• Jurisdiction: {result['jurisdiction_code']}\n"
+            f"• Incorporated: {result['incorporation_date']}\n"
+            f"• Status: {result['current_status']}"
+        )
+        client.chat_postMessage(channel=channel, text=text)
 
-if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
+    return jsonify(result), 200
+
