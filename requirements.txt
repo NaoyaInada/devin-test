@@ -1,3 +1,4 @@
 Flask
 gunicorn
 slack_sdk
+requests
